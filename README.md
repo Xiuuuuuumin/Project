@@ -114,17 +114,56 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
 ```
 - ROS 特殊訊息：
 ```
-// odom
+// odom (更新車輛即時位置)
+// ros -> server | server -> flutter & web
 {
     "type": "odom",
-    "data": {...}
+	"name": "hero0",
+    "pose": {"position": {"lat": 24.06695567075799, "lon": 120.55870621577314}, "yaw": 20}
 }
 
-// estimate
+// estimate (路線規劃請求api)
+// flutter -> server -> ros
 {
     "type": "estimate",
-    "message_id": "123456",
-    "result": {...}
+    "message_id": message_id,
+    "user_id": current_user.id,
+    "pick_up": {"lat": req.pickup_lat, "lng": req.pickup_lng},
+    "drop_off": {"lat": req.dropoff_lat, "lng": req.dropoff_lng},
+}
+// ros -> server -> flutter
+{
+    "type": "route_preview_result",
+    "message_id": message_id,
+    "user_id": user_id,
+    "path": path
+}
+
+// dispatch (請求派車)
+// flutter -> server -> ros
+{
+    "type": "dispatch",
+    "user_id": order.user_id,
+    "pick_up": {
+        "lat": order.pickup_lat,
+        "lng": order.pickup_lng,
+    },
+    "drop_off": {
+        "lat": order.dropoff_lat,
+        "lng": order.dropoff_lng,
+    },
+}
+
+// dispatched (派車)
+// ros -> server -> flutter
+{
+    "status": "dispatched",
+    "user_id":user_id,
+    "assigned_vehicle": best_role,
+    "eta_to_pick": round(eta_to_pick),
+    "eta_trip": round(eta_trip),
+    "path1": [],
+    "path2": [],
 }
 
 ```
