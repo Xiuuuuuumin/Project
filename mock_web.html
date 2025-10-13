@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>WebSocket 測試頁</title>
+</head>
+<body>
+    <h1>WebSocket 測試</h1>
+
+    <label>Client Type:
+        <select id="clientType">
+            <option value="ros">ROS</option>
+            <option value="flutter">Flutter</option>
+            <option value="web" selected>Web</option>
+        </select>
+    </label>
+    <button onclick="connectWS()">Connect</button>
+    <br><br>
+
+    <textarea id="log" cols="80" rows="20" readonly></textarea>
+    <br>
+    <input type="text" id="msgInput" placeholder="輸入訊息">
+    <button onclick="sendMsg()">Send</button>
+
+    <script>
+        let ws;
+        const log = document.getElementById("log");
+        const TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwOTEyMzQ1Njc4Iiwicm9sZSI6ImFkbWluIiwiZXhwIjoxNzYwOTM1MTUwfQ.bAROk4fIvX3nCiB779go7xvoaRLkzXuHh7fmvyiO5mg";
+
+        function appendLog(msg) {
+            log.value += msg + "\n";
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function connectWS() {
+            const clientType = document.getElementById("clientType").value;
+            const url = `wss://635d713dea3a.ngrok-free.app/ws?client_type=${clientType}`;
+            ws = new WebSocket(url);
+
+            ws.onopen = () => {
+                appendLog(`✅ 已連線 (${clientType})`);
+
+                // 第一次訊息：認證
+                if (clientType === "web") {
+                    ws.send(JSON.stringify({ token: TOKEN }));
+                    appendLog("➡️ 已送出 Web 認證 token");
+                } else if (clientType === "flutter") {
+                    ws.send(JSON.stringify({ token: TOKEN, user_id: 22 }));
+                    appendLog("➡️ 已送出 Flutter 認證 token + user_id");
+                } else if (clientType === "ros") {
+                    appendLog("ℹ️ ROS 無需認證，可直接傳送資料");
+                }
+            };
+
+            ws.onmessage = (event) => {
+                appendLog(`📦 收到訊息: ${event.data}`);
+            };
+
+            ws.onclose = (event) => {
+                appendLog(`❌ 連線關閉 (code=${event.code}, reason=${event.reason})`);
+            };
+
+            ws.onerror = (err) => {
+                appendLog(`⚠️ 錯誤: ${err}`);
+            };
+        }
+
+        function sendMsg() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                alert("WebSocket 尚未連線！");
+                return;
+            }
+            const msg = document.getElementById("msgInput").value;
+            ws.send(msg);
+            appendLog(`➡️ 傳送: ${msg}`);
+            document.getElementById("msgInput").value = "";
+        }
+    </script>
+</body>
+</html>

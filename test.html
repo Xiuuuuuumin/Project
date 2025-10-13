@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Test Admin POST Drivers</title>
+</head>
+<body>
+    <h1>測試 POST /api/v1/admin/driver</h1>
+    <p>結果請查看瀏覽器的 Console (F12)。</p>
+    <div id="result"></div>
+
+<script>
+async function getDrivers() {
+    // ⚠️ 請務必替換成您最新的 ngrok URL
+    const url = "https://2bd94d45dfcf.ngrok-free.app/api/v1/admin/driver";
+    
+    // ⚠️ 請務必替換成一個有效的、未過期的 Admin JWT Token
+    const token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwOTEyMzQ1Njc4Iiwicm9sZSI6ImFkbWluIiwiZXhwIjoxNzYwNzA2ODUxfQ.7O2j5ksoQbIpRhv3c4YRNfiuAudt-eXhVkoWcA_AmtE";
+
+    console.log(`發送 POST 請求到: ${url}`);
+    
+    try {
+        const res = await fetch(url, {
+            // 關鍵修改 1: 將 GET 改為 POST
+            method: "POST", 
+            headers: {
+                // Content-Type 必須為 application/json
+                "Content-Type": "application/json", 
+                // 攜帶 Admin 認證 Token
+                "Authorization": `Bearer ${token}` 
+            },
+            // 關鍵修改 2: 傳遞一個空的 JSON Body，對應您 FastAPI 程式碼中的 Body(default=None)
+            body: JSON.stringify({}) 
+        });
+
+        // 檢查 HTTP 狀態碼
+        if (!res.ok) {
+            console.error("❌ HTTP 請求失敗！", res.status, res.statusText);
+            
+            // 嘗試讀取錯誤回應內容（通常是 HTML 錯誤頁面或 JSON 錯誤訊息）
+            const text = await res.text();
+            console.error("錯誤回應內容:", text.substring(0, 500) + '...');
+            
+            document.getElementById("result").innerHTML = 
+                `<p style="color:red;">錯誤: ${res.status} ${res.statusText}</p>
+                 <pre>${text.substring(0, 500) + '...'}</pre>`;
+            return;
+        }
+
+        // 成功，解析 JSON
+        const data = await res.json();
+        console.log("✅ 司機資料清單 (JSON) 成功獲取:", data);
+
+        // 顯示在畫面上
+        const pre = document.createElement("pre");
+        pre.textContent = JSON.stringify(data, null, 2);
+        document.getElementById("result").innerHTML = "<h2>成功回應數據:</h2>";
+        document.getElementById("result").appendChild(pre);
+        
+    } catch (err) {
+        // 處理網路層錯誤，例如 CORS 或連線問題
+        console.error("致命的 Fetch 發生錯誤:", err);
+        document.getElementById("result").innerHTML = 
+            `<p style="color:red;">網路錯誤或 CORS 問題: ${err.message}</p>`;
+    }
+}
+
+getDrivers();
+</script>
+</body>
+</html>
