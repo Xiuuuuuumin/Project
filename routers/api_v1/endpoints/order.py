@@ -26,7 +26,7 @@ router = APIRouter()
     description="""
 ### 建立新訂單
 
-此端點用於客戶建立一個新的乘車訂單。
+此端點用於客戶建立一個新的乘車訂單，並將該客戶所有待派車的訂單標為已取消。
 
 **安全性：**
 需在 Header 中提供有效的 **JWT Access Token**。
@@ -67,6 +67,22 @@ async def create_order(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    try:
+        pending_orders = db.query(Order).filter(
+            Order.user_id == current_user.id,
+            Order.status == OrderStatus.PENDING.value  # status==0
+        ).all()
+        
+        for o in pending_orders:
+            o.status = OrderStatus.CANCELLED.value  # status=5
+        if pending_orders:
+            db.commit()
+            print(f"已將 user {current_user.id} 的 {len(pending_orders)} 個待派車訂單標記為取消")
+    except Exception as e:
+        db.rollback()
+        print("取消舊訂單時發生錯誤:", e)
+        raise HTTPException(status_code=500, detail="Failed to cancel old pending orders")
+    
     order_id = uuid4().hex
     order = Order(
         order_id=order_id,
@@ -79,11 +95,12 @@ async def create_order(
         dropoff_name=order_in.dropoff_name,
         status=OrderStatus.PENDING.value,
     )
-
+    
     try:
         db.add(order)
         db.commit()
         db.refresh(order)
+
     except IntegrityError as e:
         db.rollback()
         if "foreign key" in str(e.orig).lower():

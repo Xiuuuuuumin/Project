@@ -10,7 +10,7 @@ class WebSocketServer:
         self.active_connections: dict[str, list[WebSocket]] = {
             "flutter": [], "ros": [], "web": []
         }
-        self.user_map: dict[int, WebSocket] = {}  # user_id → websocket
+        self.user_map: dict[str, WebSocket] = {}  # user_id → websocket
         self.ros_message_callback = None
         self.manager = None
 
@@ -33,7 +33,7 @@ class WebSocketServer:
         # 移除 user_map 中綁定
         to_delete = [uid for uid, ws in self.user_map.items() if ws == websocket]
         for uid in to_delete:
-            del self.user_map[uid]
+            del self.user_map[str(uid)]
 
     # ----------------------
     # 驗證方法
@@ -120,7 +120,7 @@ class WebSocketServer:
         print(f"User {user_id} connection established.")
         await self.connect(websocket, "flutter")
         # 綁定 user_id → websocket
-        self.user_map[user_id] = websocket
+        self.user_map[str(user_id)] = websocket
     
         await self.send_json(websocket, {
             "type": "auth",

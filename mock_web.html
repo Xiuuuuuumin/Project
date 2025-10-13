@@ -25,7 +25,7 @@
     <script>
         let ws;
         const log = document.getElementById("log");
-        const TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwOTEyMzQ1Njc4Iiwicm9sZSI6ImFkbWluIiwiZXhwIjoxNzYwOTM1MTUwfQ.bAROk4fIvX3nCiB779go7xvoaRLkzXuHh7fmvyiO5mg";
+        const TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIiwicm9sZSI6InVzZXIiLCJleHAiOjE3NjA5NTczNzJ9.GdcnycNoaU01l8WMEJ6DX_g4DbW6zMcXTSpuTm2wBXQ";
 
         function appendLog(msg) {
             log.value += msg + "\n";
@@ -45,7 +45,7 @@
                     ws.send(JSON.stringify({ token: TOKEN }));
                     appendLog("➡️ 已送出 Web 認證 token");
                 } else if (clientType === "flutter") {
-                    ws.send(JSON.stringify({ token: TOKEN, user_id: 22 }));
+                    ws.send(JSON.stringify({ token: TOKEN, user_id: 19 }));
                     appendLog("➡️ 已送出 Flutter 認證 token + user_id");
                 } else if (clientType === "ros") {
                     appendLog("ℹ️ ROS 無需認證，可直接傳送資料");

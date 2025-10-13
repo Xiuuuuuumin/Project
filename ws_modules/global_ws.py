@@ -3,8 +3,7 @@ from ws_modules.manager import WebSocketManager
 from database import get_db
 
 server_ws = WebSocketServer()
-db_session = next(get_db())
-manager = WebSocketManager(server_ws, db_session)
+manager = WebSocketManager(server_ws)
 server_ws.manager = manager
 
 def handle_ros_message(message: dict):
