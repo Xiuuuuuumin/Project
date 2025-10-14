@@ -133,7 +133,7 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
 }
 // ros -> server -> flutter
 {
-	"type": "estimated"
+	"type": "estimate"
 	"user_id": user_id,
 	"message_id": message_id,
 	"best_vehicle": best_role,
