@@ -164,9 +164,11 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
 {
     "type": "dispatched",
     "user_id":user_id,
+	"order_id": order_id,
     "assigned_vehicle": best_role,
     "eta_to_pick": round(eta_to_pick),
     "eta_trip": round(eta_trip),
+	"total_distance_m": ,
     "path1": [],
     "path2": [],
 }
