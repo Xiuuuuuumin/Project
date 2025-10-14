@@ -162,7 +162,7 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
 // dispatched (派車)
 // ros -> server -> flutter
 {
-    "status": "dispatched",
+    "type": "dispatched",
     "user_id":user_id,
     "assigned_vehicle": best_role,
     "eta_to_pick": round(eta_to_pick),
