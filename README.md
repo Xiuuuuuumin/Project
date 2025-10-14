@@ -143,6 +143,8 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
 // flutter -> server -> ros
 {
     "type": "dispatch",
+	"passengers": order.passengers,
+	"accept_pooling": order.accept_pooling,
     "user_id": order.user_id,
     "pick_up": {
         "lat": order.pickup_lat,
