@@ -133,10 +133,13 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
 }
 // ros -> server -> flutter
 {
-    "type": "route_preview_result",
-    "message_id": message_id,
-    "user_id": user_id,
-    "path": path
+	"type": "estimated"
+	"user_id": user_id,
+	"message_id": message_id,
+	"best_vehicle": best_role,
+	"etamin": round(min(e for e, , _ in eta_list) / 60.0),
+ 	"etamax": round(max(e for e, , _ in eta_list) / 60.0),
+	 "path": route_best,
 }
 
 // dispatch (請求派車)
