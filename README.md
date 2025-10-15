@@ -59,7 +59,8 @@ final ws = WebSocket.connect("wss://your-domain.com/ws?client_type=flutter");
 ```
 ws.add(jsonEncode({
   "token": "YOUR_BEARER_TOKEN",
-  "user_id": 22
+  "user_id": 22,
+  "vehicle": assign_vehicle
 }));
 
 ```
