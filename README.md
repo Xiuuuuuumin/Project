@@ -192,7 +192,8 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
 // flutter -> server -> ros
 {
 	"type": "geton",
-	"vehicle_name": vehicle_name'
+	"vehicle_name": vehicle_name,
+	"order_id": order_id
 }
 
 ```
