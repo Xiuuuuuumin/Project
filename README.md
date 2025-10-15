@@ -188,6 +188,14 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
     "path2": [],
 }
 
+// ready_2_trip (請上車)
+// ros -> server -> flutter
+{
+	"type": "ready_2_trip",
+	"vehicle_name": vehicle_name,
+	"user_id": user_id
+}
+
 // geton (上車)
 // flutter -> server -> ros
 {
