@@ -174,6 +174,27 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
     "path2": [],
 }
 
+// queued (等車)
+// ros -> server -> flutter
+{
+    "type": "queued",
+    "user_id":user_id,
+	"order_id": order_id,
+    "assigned_vehicle": best_role,
+    "eta_to_pick": round(eta_to_pick),
+    "eta_trip": round(eta_trip),
+	"total_distance_m": ,
+    "path1": [],
+    "path2": [],
+}
+
+// geton (上車)
+// flutter -> server -> ros
+{
+	"type": "geton",
+	"vehicle_name": vehicle_name'
+}
+
 ```
 ### 5. 注意事項
 1. Web / Flutter 端需在連線後立即送認證訊息，否則伺服器會自動斷線（timeout 5 秒）。
