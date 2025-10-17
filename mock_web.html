@@ -15,6 +15,7 @@
         </select>
     </label>
     <button onclick="connectWS()">Connect</button>
+    <button id="toggleOdomBtn" onclick="toggleOdom()">顯示 ODOM 訊息</button>
     <br><br>
 
     <textarea id="log" cols="80" rows="20" readonly></textarea>
@@ -25,11 +26,22 @@
     <script>
         let ws;
         const log = document.getElementById("log");
-        const TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIiwicm9sZSI6InVzZXIiLCJleHAiOjE3NjA5NTczNzJ9.GdcnycNoaU01l8WMEJ6DX_g4DbW6zMcXTSpuTm2wBXQ";
+        const VN = "hero1";
+        const TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIiwicm9sZSI6InVzZXIiLCJleHAiOjE3NjEwNjE4MzN9.n1TDQ36SbaHxDx7CUlbvTfx8gyllL7b6lPxiqh-uBEk";
+        //const TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwOTEyMzQ1Njc4Iiwicm9sZSI6ImFkbWluIiwiZXhwIjoxNzYwOTU4MjU5fQ.UGJ_1IOsGOc5SVxc9qezk5vfZ9oafKrKiUDesQ1yolc";
+
+        let hideOdom = true; // 是否隱藏 type=odom
+        const toggleBtn = document.getElementById("toggleOdomBtn");
 
         function appendLog(msg) {
             log.value += msg + "\n";
             log.scrollTop = log.scrollHeight;
+        }
+
+        function toggleOdom() {
+            hideOdom = !hideOdom;
+            toggleBtn.textContent = hideOdom ? "顯示 ODOM 訊息" : "隱藏 ODOM 訊息";
+            appendLog(`ℹ️ type=odom 訊息現在 ${hideOdom ? "隱藏" : "顯示"}`);
         }
 
         function connectWS() {
@@ -45,7 +57,7 @@
                     ws.send(JSON.stringify({ token: TOKEN }));
                     appendLog("➡️ 已送出 Web 認證 token");
                 } else if (clientType === "flutter") {
-                    ws.send(JSON.stringify({ token: TOKEN, user_id: 19 }));
+                    ws.send(JSON.stringify({ token: TOKEN, user_id: 19, vehicle_name: VN }));
                     appendLog("➡️ 已送出 Flutter 認證 token + user_id");
                 } else if (clientType === "ros") {
                     appendLog("ℹ️ ROS 無需認證，可直接傳送資料");
@@ -53,6 +65,16 @@
             };
 
             ws.onmessage = (event) => {
+                let data;
+                try {
+                    data = JSON.parse(event.data);
+                } catch {
+                    data = null;
+                }
+
+                // 判斷 type 是否為 odom 並且是否隱藏
+                if (data && data.type === "odom" && hideOdom) return;
+
                 appendLog(`📦 收到訊息: ${event.data}`);
             };
 

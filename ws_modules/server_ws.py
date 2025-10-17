@@ -15,7 +15,6 @@ class WebSocketServer:
         self.manager = None
 
     def set_ros_callback(self, callback):
-        """讓外部註冊一個 ROS 訊息的回呼函式"""
         self.ros_message_callback = callback
 
     # ----------------------
@@ -43,59 +42,86 @@ class WebSocketServer:
         try:
             data = await asyncio.wait_for(websocket.receive_text(), timeout=timeout)
         except asyncio.TimeoutError:
-            await websocket.close(code=4004, reason="Auth timeout")
+            await websocket.close(code=4004, reason="Auth timeout(5 secs).")
             raise WebSocketDisconnect()
         
-        msg = self._parse_json_or_close(websocket, data, "Auth must be JSON")
+        msg = self._parse_json_or_close(websocket, data, "Auth must be JSON.")
         token = msg.get("token") or await self._close_missing_token(websocket)
         user = await asyncio.to_thread(lambda: admin_viewer_required(current_user=get_current_user(token, db), db=db))
         return user
 
-    # Flutter
+    """ # Flutter
     async def verify_flutter_user(self, websocket, db: Session, timeout: float = 5.0):
         try:
             data = await asyncio.wait_for(websocket.receive_text(), timeout=timeout)
         except asyncio.TimeoutError:
-            await websocket.close(code=4004, reason="Auth timeout")
+            await websocket.close(code=4004, reason="Auth timeout(5 secs).")
             raise WebSocketDisconnect()
         
-        msg = self._parse_json_or_close(websocket, data, "Auth must be JSON")
+        msg = self._parse_json_or_close(websocket, data, "Auth must be JSON.")
         token = msg.get("token") or await self._close_missing_token(websocket)
+        vehicle = msg.get("vehicle_name")
         user_id = msg.get("user_id")
+
+        if vehicle is None:
+            await websocket.close(code=4003, reason="Missing vehicle name.")
+            raise WebSocketDisconnect()
+        
         if user_id is None:
-            await websocket.close(code=4003, reason="Missing user_id")
+            await websocket.close(code=4003, reason="Missing user id.")
             raise WebSocketDisconnect()
         
         user = await asyncio.to_thread(lambda: get_current_user(token, db))
         if str(user.id) != str(user_id):
-            await websocket.close(code=4005, reason="User ID mismatch with token")
+            await websocket.close(code=4005, reason="User ID mismatch with token.")
             raise WebSocketDisconnect()
-        return user, user_id
-
-    # ----------------------
-    # 共用 JSON 循環
-    # ----------------------
-    async def handle_messages(self, websocket: WebSocket, client_type: str):
+        return user, user_id, vehicle """
+    
+    async def verify_flutter_user(self, websocket, db: Session, timeout: float = 5.0):
         try:
-            while True:
-                try:
-                    data = await websocket.receive_text()
-                except WebSocketDisconnect:
-                    break
+            print("[verify] 等待 Flutter 傳入驗證資料中...")
+            data = await asyncio.wait_for(websocket.receive_text(), timeout=timeout)
+            print(f"[verify] 收到原始資料: {data}")
+        except asyncio.TimeoutError:
+            print("[verify] ❌ 驗證逾時（5 秒內未收到任何資料）")
+            await websocket.close(code=4004, reason="Auth timeout(5 secs).")
+            raise WebSocketDisconnect()
+        
+        msg = self._parse_json_or_close(websocket, data, "Auth must be JSON.")
+        print(f"[verify] 解析後資料: {msg}")
 
-                message = self._parse_json(data, websocket)
-                if not message:
-                    continue
+        token = msg.get("token") or await self._close_missing_token(websocket)
+        vehicle = msg.get("vehicle_name")
+        user_id = msg.get("user_id")
 
-                print(f"收到 {client_type} 的訊息: {message}")
+        if vehicle is None:
+            print("[verify] ❌ 缺少 vehicle_name")
+            await websocket.close(code=4003, reason="Missing vehicle name.")
+            raise WebSocketDisconnect()
+        
+        if user_id is None:
+            print("[verify] ❌ 缺少 user_id")
+            await websocket.close(code=4003, reason="Missing user id.")
+            raise WebSocketDisconnect()
+        
+        try:
+            print(f"[verify] 開始驗證 token 對應的 user（user_id={user_id}）")
+            user = await asyncio.to_thread(lambda: get_current_user(token, db))
+            print(f"[verify] token 驗證成功，用戶 ID: {user.id}")
+        except Exception as e:
+            print(f"[verify] ❌ get_current_user 失敗: {e}")
+            await websocket.close(code=4006, reason="Token verification failed.")
+            raise WebSocketDisconnect()
 
-                if client_type == "ros":
-                    await self._handle_ros_message(message)
-                else:
-                    # Flutter/Web 可以擴充
-                    pass
-        finally:
-            self.disconnect(websocket)
+        if str(user.id) != str(user_id):
+            print(f"[verify] ❌ 用戶 ID 不匹配：token內 {user.id} ≠ 傳入 {user_id}")
+            await websocket.close(code=4005, reason="User ID mismatch with token.")
+            raise WebSocketDisconnect()
+
+        print("[verify] ✅ 驗證通過，成功登入！")
+        return user, user_id, vehicle
+
+
 
     # ----------------------
     # 各 client endpoint
@@ -116,11 +142,16 @@ class WebSocketServer:
 
     async def websocket_endpoint_flutter(self, websocket: WebSocket, db: Session = Depends(get_db)):
         await websocket.accept()
-        user, user_id = await self.verify_flutter_user(websocket, db)
+        user, user_id, vehicle = await self.verify_flutter_user(websocket, db)
         print(f"User {user_id} connection established.")
         await self.connect(websocket, "flutter")
+
         # 綁定 user_id → websocket
         self.user_map[str(user_id)] = websocket
+
+        if vehicle not in self.manager.vehicle_user_map:
+            self.manager.vehicle_user_map[vehicle] = set()
+        self.manager.vehicle_user_map[vehicle].add(str(user_id))
     
         await self.send_json(websocket, {
             "type": "auth",
@@ -128,7 +159,16 @@ class WebSocketServer:
             "message": f"User {user_id} connection established."
         })
 
-        await self.handle_messages(websocket, "flutter")
+        try:
+            await self.handle_messages(websocket, "flutter")
+        finally:
+            # 當 websocket 關閉時，自動移除該 user
+            if vehicle in self.manager.vehicle_user_map:
+                self.manager.vehicle_user_map[vehicle].discard(str(user_id))
+                if not self.manager.vehicle_user_map[vehicle]:
+                    # 如果該車沒剩任何使用者，刪掉 key
+                    del self.manager.vehicle_user_map[vehicle]
+            print(f"User {user_id} disconnected from vehicle {vehicle}")
 
     async def websocket_endpoint_ros(self, websocket: WebSocket):
         await websocket.accept()
@@ -165,9 +205,25 @@ class WebSocketServer:
             try: await self.manager.handle_ros_odom(message)
             except Exception as e: print("handle_ros_odom error:", e)
 
-        elif t == "dispatched" and self.manager:
-            try: await self.manager.handle_ros_dispatched(message)
-            except Exception as e: print("handle_ros_dispatched error:", e)
+        elif (t == "dispatched" or t == "queued") and self.manager:
+            order_id = message.get("order_id")
+            if order_id:
+                try:
+                    self.manager.set_ros_response(order_id, message)
+                except Exception as e:
+                    print("set_ros_response error:", e)
+            try:
+                await self.manager.handle_ros_dispatched_queued(message)
+            except Exception as e:
+                print("handle_ros_dispatched error:", e)
+
+            if self.ros_message_callback:
+                try:
+                    ret = self.ros_message_callback(message)
+                    if asyncio.iscoroutine(ret):
+                        asyncio.create_task(ret)
+                except Exception as e:
+                    print("ros_message_callback error:", e)
 
         elif t == "estimate" and self.manager:
             msg_id = message.get("message_id")
@@ -179,6 +235,50 @@ class WebSocketServer:
                     ret = self.ros_message_callback(message)
                     if asyncio.iscoroutine(ret): asyncio.create_task(ret)
                 except Exception as e: print("ros_message_callback error:", e)
+        
+        elif t == "ready_2_trip" and self.manager:
+            try: await self.manager.handle_ros_ready_to_trip(message)
+            except Exception as e: print("handle_ros_odom error:", e)
+            
+    async def _handle_flutter_message(self, message: dict):
+        t = message.get("type")
+
+        if t == "geton" and self.manager:
+            try:
+                await self.manager.broadcast_to_ros(message)
+            except Exception as e:
+                print(f"[geton] broadcast_to_ros error: {e}")
+
+            try:
+                await self.broadcast(message, "web")
+            except Exception as e:
+                print(f"[geton] broadcast_to_web error: {e}")
+            
+    # ----------------------
+    # 共用 JSON 循環
+    # ----------------------
+    async def handle_messages(self, websocket: WebSocket, client_type: str):
+        try:
+            while True:
+                try:
+                    data = await websocket.receive_text()
+                except WebSocketDisconnect:
+                    break
+
+                message = self._parse_json(data, websocket)
+                if not message:
+                    continue
+                
+                if not message.get("type") == "odom":
+                    print(f"收到 {client_type} 的訊息: {message}")
+
+                if client_type == "ros":
+                    await self._handle_ros_message(message)
+                elif client_type == "flutter":
+                    await self._handle_flutter_message(message)
+                    pass
+        finally:
+            self.disconnect(websocket)
 
     # ----------------------
     # 送訊息
@@ -199,3 +299,22 @@ class WebSocketServer:
 
         for ws in disconnected:
             self.disconnect(ws)
+
+    async def broadcast_to_user(self, user_id: str, message: dict):
+        ws = self.user_map.get(str(user_id))
+        if not ws:
+            print(f"Failed to send, user {user_id} offline.")
+            self.disconnect(ws)
+            return
+
+        if ws.client_state.name != "CONNECTED":
+            print(f"user {user_id} offline, remove from map")
+            self.user_map.pop(str(user_id), None)
+            return
+
+        try:
+            await self.send_json(ws, message)
+            print(f"Msg send to {user_id}: {message}")
+        except Exception as e:
+            print(f"Send error: {e}, remove user {user_id}")
+            self.user_map.pop(str(user_id), None)

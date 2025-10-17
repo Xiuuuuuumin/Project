@@ -36,8 +36,6 @@ def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        print("type(jwt):", type(jwt))
-        print("token:", token)
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         phone: str | None = payload.get("sub")  # 改成 phone
         if phone is None:

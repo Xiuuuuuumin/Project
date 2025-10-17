@@ -20,7 +20,7 @@ router = APIRouter()
 #create new order
 @router.post(
     "",
-    response_model=OrderCreateRp,
+    #response_model=OrderCreateRp,
     tags=["Order"],
     summary="Create new order",
     description="""
@@ -93,6 +93,8 @@ async def create_order(
         dropoff_lng=order_in.dropoff_lng,
         pickup_name=order_in.pickup_name,
         dropoff_name=order_in.dropoff_name,
+        passengers=order_in.passengers,
+        accept_pooling=order_in.accept_pooling,
         status=OrderStatus.PENDING.value,
     )
     
@@ -110,6 +112,9 @@ async def create_order(
         
     ros_message = {
         "type": "dispatch",
+        "order_id": order.order_id,
+        "passengers": order.passengers,
+        "accept_pooling": order.accept_pooling,
         "user_id": order.user_id,
         "pick_up": {
             "lat": order.pickup_lat,
@@ -123,11 +128,19 @@ async def create_order(
 
     asyncio.create_task(manager.broadcast_to_ros(ros_message))
 
-    return OrderCreateRp(
+    try:
+        ros_response = await manager.wait_for_ros_response(order_id, timeout=10)
+    except asyncio.TimeoutError:
+        return {"status": "failed", "msg": "ROS dispatch timeout"}
+        
+    # 回傳給 client
+    return ros_response
+
+    """ return OrderCreateRp(
         order_id=order.order_id,
         status=order.status,
         message="Order created successfully"
-    )
+    ) """
 
 #update order status
 @router.put(

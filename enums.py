@@ -7,3 +7,8 @@ class OrderStatus(IntEnum):
     IN_PROGRESS = 3    # 行程中
     COMPLETED = 4      # 已完成
     CANCELLED = 5      # 已取消
+
+class DriverStatus:
+    PENDING = 0
+    ACTIVE = 1
+    OFFLINE = 2

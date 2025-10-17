@@ -1,9 +1,10 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, SmallInteger, Numeric, TIMESTAMP, Float, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
+from geoalchemy2 import Geometry
 from sqlalchemy.sql import func
 from database import Base
-from enums import OrderStatus
+from enums import OrderStatus, DriverStatus
 
 class User(Base):
     __tablename__ = "users"
@@ -57,11 +58,6 @@ class Order(Base):
     passengers = Column(Integer, nullable=False, default=1)  # 預設 1 個乘客
     accept_pooling = Column(Boolean, nullable=False, default=False)  # 預設不接受共乘
 
-class DriverStatus:
-    PENDING = 0
-    ACTIVE = 1
-    OFFLINE = 2
-
 class Driver(Base):
     __tablename__ = "drivers"
 
@@ -86,3 +82,19 @@ class Driver(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc)
     )
+
+class Route(Base):
+    __tablename__ = "routes"
+
+    order_id = Column(String(32), primary_key=True, nullable=False, index=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    vehicle_name = Column(String(50), nullable=True)
+    type = Column(SmallInteger, nullable=False)
+    eta_to_pick = Column(Float, nullable=True)
+    eta_trip = Column(Float, nullable=True)
+    total_distance_m = Column(Float, nullable=True)
+    path1 = Column(Geometry(geometry_type="LINESTRING", srid=4326), nullable=True)  # 整條路線
+    path2 = Column(Geometry(geometry_type="LINESTRING", srid=4326), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(),
+                        onupdate=func.now(), nullable=False)

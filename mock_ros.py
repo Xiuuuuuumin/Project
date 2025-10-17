@@ -112,7 +112,7 @@ async def handle_server_messages(ws):
             msg_type = payload.get("type")
 
             # ----- route preview -----
-            if msg_type == "route_preview":
+            if msg_type == "estimate":
                 message_id = payload.get("message_id")
                 user_id = payload.get("user_id")
                 pick_up = payload.get("pick_up")
@@ -123,7 +123,7 @@ async def handle_server_messages(ws):
 
                 # 回傳路線
                 response = {
-                    "type": "route_preview_result",
+                    "type": "estimated",
                     "message_id": message_id,
                     "user_id": user_id,
                     "path": path
@@ -136,12 +136,14 @@ async def handle_server_messages(ws):
                 user_id = payload.get("user_id")
                 pick_up = payload.get("pick_up")
                 drop_off = payload.get("drop_off")
+                order_id = payload.get("order_id")
 
                 # 生成簡單路線 path2
                 path2 = generate_route(pick_up, drop_off)
 
                 dispatched_msg = {
                     "type": "dispatched",
+                    "order_id": order_id,
                     "user_id": user_id,
                     "assigned_vehicle": "hero1",
                     "eta_to_pick": random.randint(20, 60),
