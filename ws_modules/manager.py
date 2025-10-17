@@ -8,6 +8,9 @@ class WebSocketManager:
         self.server_ws = server_ws
         self.pending_responses: dict[str, asyncio.Future] = {}
 
+        self.vehicle_user_map = {}  # vehicle_name → user_id
+        self.user_vehicle_map = {}  # user_id → vehicle_name
+
     async def start_background_tasks(self):
         # 可增加多個 background task
         asyncio.create_task(self.periodic_broadcast())
@@ -19,10 +22,26 @@ class WebSocketManager:
 
     async def broadcast_to_ros(self, ros_message: dict):
         """
+        *for route api
         封裝發送給 ROS client 的訊息邏輯
         """
         await self.server_ws.broadcast(ros_message, client_type="ros")
         print("已推送給 ROS:", ros_message)
+
+    async def broadcast_to_user(self, user_id: str, message: dict):
+        """
+        傳送訊息給指定使用者（乘客）
+        若該使用者目前在線上，則直接推送。
+        """
+        websocket = self.server_ws.user_map.get(str(user_id))
+        if websocket:
+            try:
+                await self.server_ws.send_json(websocket, message)
+                print(f"已推送給用戶 {user_id}: {message}")
+            except Exception as e:
+                print(f"推送給用戶 {user_id} 失敗: {e}")
+        else:
+            print(f"無法推送，user {user_id} 不在線上")
 
     async def wait_for_ros_response(self, message_id: str, timeout: int = 10):
         """
@@ -48,28 +67,30 @@ class WebSocketManager:
     # Odom 訊息處理
     # -------------------
     async def handle_ros_odom(self, message: dict):
-        # 先推給 web client
+        name = message.get("name")  # e.g. hero0/ hero1
+        pose = message.get("pose", {})
+        position = pose.get("position", {})
+        yaw = pose.get("yaw")
+
         await self.server_ws.broadcast(message, client_type="web")
 
-        # 如果是 odom 訊息，更新資料庫
-        if message.get("type") == "odom":
-            name = message.get("name")  # 例如 'ego_vehicle'
-            pose = message.get("pose", {})
-            position = pose.get("position", {})
-            yaw = pose.get("yaw")
+        if position.get("lat") is not None and position.get("lon") is not None:
+            try:
+                # 即時取得 session
+                db_session = next(get_db())
+                driver = db_session.query(Driver).filter(Driver.name == name).first()
+                if driver:
+                    driver.current_lat = position["lat"]
+                    driver.current_lng = position["lon"]
+                    driver.yaw = yaw
+                    db_session.commit()
+            except Exception as e:
+                print("更新 driver 位置時發生錯誤:", e)
 
-            if position.get("lat") is not None and position.get("lng") is not None:
-                try:
-                    # 即時取得 session
-                    db_session = next(get_db())
-                    driver = db_session.query(Driver).filter(Driver.name == name).first()
-                    if driver:
-                        driver.current_lat = position["lat"]
-                        driver.current_lng = position["lng"]
-                        driver.yaw = yaw
-                        db_session.commit()
-                except Exception as e:
-                    print("更新 driver 位置時發生錯誤:", e)
+        user_id = self.vehicle_user_map.get(name)   # vehicle -> user
+        if not user_id:
+           return
+        await self.broadcast_to_user(user_id, message)
 
     # -------------------
     # Dispatch 訊息處理
@@ -79,9 +100,16 @@ class WebSocketManager:
         收到 ROS dispatch 訊息後：
         1. 推送給對應 user_id 的 Flutter client
         2. 將該 user 尚未派車的訂單 status 改成 1，並 assign driver
+        3. 建立 user 與 vehicle 的關聯
         """
         user_id = message.get("user_id")
         assigned_vehicle = message.get("assigned_vehicle")
+
+        # --- 建立關聯 ---
+        if user_id and assigned_vehicle:
+            self.vehicle_user_map[assigned_vehicle] = user_id
+            self.user_vehicle_map[user_id] = assigned_vehicle
+            print(f"[ROS] {assigned_vehicle} 已派給用戶 {user_id}")
 
         if not user_id:
             print("收到 dispatched 訊息，但沒有 user_id，無法轉發")
@@ -89,6 +117,7 @@ class WebSocketManager:
 
         # --- 推送給 Flutter ---
         ws = self.server_ws.user_map.get(str(user_id))
+
         if ws:
             try:
                 await self.server_ws.send_json(ws, message)

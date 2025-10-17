@@ -60,8 +60,7 @@ class Order(Base):
 class DriverStatus:
     PENDING = 0
     ACTIVE = 1
-    SUSPENDED = 2
-    OFFLINE = 3
+    OFFLINE = 2
 
 class Driver(Base):
     __tablename__ = "drivers"

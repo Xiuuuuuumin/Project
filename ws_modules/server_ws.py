@@ -158,13 +158,17 @@ class WebSocketServer:
         raise WebSocketDisconnect()
 
     async def _handle_ros_message(self, message: dict):
+
         t = message.get("type")
+
         if t == "odom" and self.manager:
             try: await self.manager.handle_ros_odom(message)
             except Exception as e: print("handle_ros_odom error:", e)
+
         elif t == "dispatched" and self.manager:
             try: await self.manager.handle_ros_dispatched(message)
             except Exception as e: print("handle_ros_dispatched error:", e)
+
         elif t == "estimate" and self.manager:
             msg_id = message.get("message_id")
             try:

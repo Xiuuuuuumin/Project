@@ -33,7 +33,7 @@ def generate_odom(step):
         "type": "odom",
         "name": "hero1",
         "pose": {
-            "position": {"lat": lat, "lng": lng},
+            "position": {"lat": lat, "lon": lng},
             "yaw": yaw
         }
     }
