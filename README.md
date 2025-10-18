@@ -189,6 +189,16 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
     "path2": [],
 }
 
+// picking (接乘客的過程)
+// ros -> server -> flutter
+{
+	"type": "picking",
+	"vehicle_name": vehicle_name,
+	"eta_to_pick": ,
+	"eda_to_pick": ,
+	"progress": 
+} 
+
 // ready_2_trip (請上車)
 // ros -> server -> flutter
 {
@@ -201,6 +211,48 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
 // flutter -> server -> ros
 {
 	"type": "geton",
+	"vehicle_name": vehicle_name,
+	"order_id": order_id
+}
+
+// trip (出發)
+// ros -> server -> flutter
+{
+	"type": "trip",
+	"vehicle_name": vehicle_name,
+	"order_id": order_id
+}
+
+// tripping (載客的過程)
+// ros -> server -> flutter
+{
+	"type": "tripping",
+	"vehicle_name": vehicle_name,
+	"eta_to_des": ,
+	"eda_to_des": ,
+	"progress": 
+}
+
+// arrive (抵達目的地)
+// ros -> server -> flutter
+{
+	"type": "arrive",
+	"vehicle_name": vehicle_name,
+	"order_id": order_id
+}
+
+// getoff (下車)
+// flutter -> server -> ros
+{
+	"type": "getoff",
+	"vehicle_name": vehicle_name,
+	"order_id": order_id
+}
+
+// finish (結單)
+// ros -> server -> flutter
+{
+	"type": "finish",
 	"vehicle_name": vehicle_name,
 	"order_id": order_id
 }
