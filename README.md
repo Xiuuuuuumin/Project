@@ -178,15 +178,11 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
 // queued (等車)
 // ros -> server -> flutter
 {
-    "type": "queued",
-    "user_id":user_id,
-	"order_id": order_id,
-    "vehicle": best_role,
-    "eta_to_pick": round(eta_to_pick),
-    "eta_trip": round(eta_trip),
-	"total_distance_m": ,
-    "path1": [],
-    "path2": [],
+     "type": "queued",
+     "order_id": order_id,
+     "eta_wait_sec": round(eta_wait_to_pick, 1),
+     "path2": route_trip,
+     "message": f"目前車輛忙碌，預計約 {eta_wait_to_pick:.1f} 秒後可上車"
 }
 
 // update_eta (接乘客的過程)
