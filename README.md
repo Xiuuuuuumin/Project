@@ -138,8 +138,8 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
 	"user_id": user_id,
 	"message_id": message_id,
 	"best_vehicle": best_role,
-	"etamin": round(min(e for e, , _ in eta_list) / 60.0),
- 	"etamax": round(max(e for e, , _ in eta_list) / 60.0),
+	"eta_min": round(min(e for e, , _ in eta_list) / 60.0),
+ 	"eta_max": round(max(e for e, , _ in eta_list) / 60.0),
 	 "path": route_best,
 }
 
