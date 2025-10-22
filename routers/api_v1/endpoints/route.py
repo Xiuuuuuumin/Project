@@ -56,8 +56,8 @@ async def preview_route(
     request: Request,
     current_user: User = Depends(get_current_user)
 ):
-    print("request headers:", request.headers)
-    print("current_user:", current_user)
+    """ print("request headers:", request.headers)
+    print("current_user:", current_user) """
 
     # Step 1. 使用前端傳入的 message_id
     message_id = req.message_id

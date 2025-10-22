@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select, and_
 from uuid import uuid4
 from database import get_db
 from models import Order, User
@@ -10,10 +11,7 @@ from enums import OrderStatus
 from typing import List
 from ws_modules.global_ws import manager
 import asyncio
-import datetime
-
-from pytz import timezone
-from datetime import timezone as dt_timezone
+from datetime import datetime, timezone as dt_timezone
 
 router = APIRouter()
 
@@ -43,7 +41,7 @@ router = APIRouter()
 | `dropoff_name` | `str` | 否 | 下車地點名稱 |
 
 **回應欄位 (`OrderCreateRp`):**
-- **order\_id** (str): 系統生成的訂單 ID。
+- **order_id** (str): 系統生成的訂單 ID。
 - **status** (int): 訂單狀態碼 (初始為 0)。
 - **message** (str): 執行結果描述。
 
@@ -53,7 +51,7 @@ router = APIRouter()
 | **0** | **PENDING** | **待派車** |
 | 1 | ACCEPTED | 已接單 |
 | 2 | ASSIGNED | 已派車 |
-| 3 | IN\_PROGRESS | 行程中 |
+| 3 | IN_PROGRESS | 行程中 |
 | 4 | COMPLETED | 已完成 |
 | 5 | CANCELLED | 已取消 |
 
@@ -64,29 +62,36 @@ router = APIRouter()
 )
 async def create_order(
     order_in: OrderCreate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # 取消 user 的待派車訂單
     try:
-        pending_orders = db.query(Order).filter(
-            Order.user_id == current_user.id,
-            Order.status == OrderStatus.PENDING.value  # status==0
-        ).all()
+        result = await db.execute(
+            select(Order).where(
+                and_(
+                    Order.user_id == current_user.id,
+                    Order.status == OrderStatus.PENDING.value
+                )
+            )
+        )
+        pending_orders = result.scalars().all()
         
         for o in pending_orders:
-            o.status = OrderStatus.CANCELLED.value  # status=5
+            o.status = OrderStatus.CANCELLED.value
+
         if pending_orders:
-            db.commit()
+            await db.commit()
             print(f"已將 user {current_user.id} 的 {len(pending_orders)} 個待派車訂單標記為取消")
     except Exception as e:
-        db.rollback()
-        print("取消舊訂單時發生錯誤:", e)
+        await db.rollback()
+        import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail="Failed to cancel old pending orders")
-    
+
     order_id = uuid4().hex
     order = Order(
         order_id=order_id,
-        user_id=current_user.id,  # id from jwt token
+        user_id=current_user.id,
         pickup_lat=order_in.pickup_lat,
         pickup_lng=order_in.pickup_lng,
         dropoff_lat=order_in.dropoff_lat,
@@ -100,47 +105,39 @@ async def create_order(
     
     try:
         db.add(order)
-        db.commit()
-        db.refresh(order)
-
+        await db.commit()
+        await db.refresh(order)
     except IntegrityError as e:
-        db.rollback()
+        await db.rollback()
         if "foreign key" in str(e.orig).lower():
             raise HTTPException(status_code=400, detail="User ID or Driver ID not exist.")
         else:
             raise HTTPException(status_code=500, detail="Database error.")
-        
+    
     ros_message = {
         "type": "dispatch",
         "order_id": order.order_id,
         "passengers": order.passengers,
         "accept_pooling": order.accept_pooling,
         "user_id": order.user_id,
-        "pick_up": {
-            "lat": order.pickup_lat,
-            "lng": order.pickup_lng,
-        },
-        "drop_off": {
-            "lat": order.dropoff_lat,
-            "lng": order.dropoff_lng,
-        },
+        "pick_up": {"lat": order.pickup_lat, "lng": order.pickup_lng},
+        "drop_off": {"lat": order.dropoff_lat, "lng": order.dropoff_lng},
+    }
+
+    web_message = {
+        "type": "get_new_order"
     }
 
     asyncio.create_task(manager.broadcast_to_ros(ros_message))
+    asyncio.create_task(manager.broadcast_to_web(web_message))
 
     try:
         ros_response = await manager.wait_for_ros_response(order_id, timeout=10)
     except asyncio.TimeoutError:
         return {"status": "failed", "msg": "ROS dispatch timeout"}
-        
-    # 回傳給 client
+    
     return ros_response
-
-    """ return OrderCreateRp(
-        order_id=order.order_id,
-        status=order.status,
-        message="Order created successfully"
-    ) """
+    #OrderCreateRp dumped
 
 #update order status
 @router.put(
@@ -170,32 +167,36 @@ async def create_order(
     ```
     """
 )
-def update_order(
+async def update_order(
     order_id: str,
     order_in: OrderUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
-    # 1. 找訂單
-    order = db.query(Order).filter(Order.order_id == order_id).first()
+    # 找訂單 (ORM select)
+    result = await db.execute(select(Order).where(Order.order_id == order_id))
+    order = result.scalars().first()  # 使用 first() 或 scalar_one_or_none() 都可以
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
-    # 2. 權限檢查：admin 可修改任何訂單，普通使用者只能改自己的
+    # 權限檢查
     try:
-        admin_viewer_required(current_user, db)
+        await admin_viewer_required(current_user, db)
     except HTTPException:
-        # 不是 admin，就要檢查是否是訂單本人
         if order.user_id != current_user.id:
             raise HTTPException(status_code=403, detail="Not authorized to update this order")
 
-    # 3. 更新狀態與時間
+    # 更新欄位
     order.status = order_in.status
-    order.updated_at = datetime.datetime.now(datetime.timezone.utc)
-    db.commit()
-    db.refresh(order)
+    order.updated_at = datetime.now(dt_timezone.utc)
 
-    # 4. 回傳結果
+    try:
+        await db.commit()
+        await db.refresh(order)
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update order: {e}")
+
     return OrderCreateRp(order_id=order.order_id, status=order.status)
 
 #get order history
@@ -224,16 +225,14 @@ def update_order(
 - **200 OK**: 如果該用戶沒有任何歷史訂單，則返回一個 **空清單 `[]`**。
 """
 )
-def get_order_history(
-    db: Session = Depends(get_db),
+async def get_order_history(
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    orders = (
-        db.query(Order)
-        .filter(Order.user_id == current_user.id)
-        .order_by(Order.created_at.desc())
-        .all()
+    result = await db.execute(
+        select(Order).where(Order.user_id == current_user.id).order_by(Order.created_at.desc())
     )
+    orders = result.scalars().all()
 
     return [
         OrderHistoryRp(
@@ -266,7 +265,7 @@ def get_order_history(
 `Authorization: Bearer <your_token>`
 
 **路徑參數 (Path Parameter):**
-- **order\_id** (str): 欲查詢的訂單的唯一 ID。
+- **order_id** (str): 欲查詢的訂單的唯一 ID。
 
 ---
 
@@ -280,33 +279,38 @@ def get_order_history(
 - **404 Not Found**: 該 `order_id` 不存在。
 """ # 請在此處插入 description 內容
 )
-def get_order(
+async def get_order(
     order_id: str,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    order = db.query(Order).filter(Order.order_id == order_id).first()
+    # ORM select
+    result = await db.execute(select(Order).where(Order.order_id == order_id))
+    order = result.scalars().first()  # 拿到單一 ORM 物件
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    if order.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Not authorized to view this order")
+
+    # 權限檢查
+    if current_user.role not in ["admin", "viewer"] and order.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to update this order")
+
     return OrderCreateRp(order_id=order.order_id, status=order.status, message="Success")
 
 #Delete Order
 @router.delete("/{order_id}", response_model=dict, tags=["Order"])
-def delete_order(
+async def delete_order(
     order_id: str,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # 檢查是否為 admin
-    admin_viewer_required(current_user, db)
-    
-    order = db.query(Order).filter(Order.order_id == order_id).first()
+    await admin_viewer_required(current_user, db)
+
+    result = await db.execute(select(Order).where(Order.order_id == order_id))
+    order = result.scalars().first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    
-    db.delete(order)
-    db.commit()
+
+    await db.delete(order)
+    await db.commit()
     return {"message": "Order deleted successfully", "order_id": order_id}
 

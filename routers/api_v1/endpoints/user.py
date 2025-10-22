@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from typing import List
-
 from database import get_db
 from models import User
 from schemas import UserProfile, UpdateRq, UpdateRp, PasswordUpdate, PasswordUpdateRp
@@ -10,9 +10,7 @@ from passlib.hash import bcrypt
 
 router = APIRouter()
 
-# ----------------------------
 # Get Current User Info
-# ----------------------------
 @router.get(
     "/me",
     response_model=UserProfile,
@@ -33,12 +31,10 @@ router = APIRouter()
     ```
     """
 )
-def read_current_user(current_user: User = Depends(get_current_user)):
+async def read_current_user(current_user: User = Depends(get_current_user)):
     return current_user
 
-# ----------------------------
 # Update Current User Info
-# ----------------------------
 @router.put(
     "/me",
     response_model=UpdateRp,
@@ -57,25 +53,25 @@ def read_current_user(current_user: User = Depends(get_current_user)):
     Requires a valid Bearer JWT access token in the `Authorization` header.
     """
 )
-def update_current_user(
+async def update_current_user(
     profile_update: UpdateRq,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     try:
         current_user.name = profile_update.name
-        db.commit()
+        db.add(current_user)
+        await db.commit()
+        await db.refresh(current_user)
         return {"status": True}
-    except Exception as e:
-        db.rollback()
+    except Exception:
+        await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"status": False, "message": "Failed to update user name"}
         )
 
-# ----------------------------
 # Update Password
-# ----------------------------
 @router.put(
     "/me/password",
     response_model=PasswordUpdateRp,
@@ -95,9 +91,9 @@ def update_current_user(
     Requires a valid Bearer JWT access token in the `Authorization` header.
     """
 )
-def update_password(
+async def update_password(
     password_update: PasswordUpdate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     # Verify old password
@@ -110,15 +106,12 @@ def update_password(
     # Update with new password
     current_user.password_hash = bcrypt.hash(password_update.new_password)
     db.add(current_user)
-    db.commit()
-    db.refresh(current_user)
+    await db.commit()
+    await db.refresh(current_user)
 
     return {"status": True, "message": "Password updated successfully"}
 
-
-# ----------------------------
 # Delete User by ID (Admin Only)
-# ----------------------------
 @router.delete(
     "/{user_id}",
     tags=["User"],
@@ -136,7 +129,7 @@ def update_password(
 ---
 
 **路徑參數 (Path Parameter):**
-- **user\_id** (int): 欲刪除的用戶的唯一 ID。
+- **user_id** (int): 欲刪除的用戶的唯一 ID。
 
 **成功回應 (Success Response):**
 - **HTTP 狀態碼：200 OK**
@@ -152,16 +145,17 @@ def update_password(
 | **500 Internal Server Error** | 刪除操作失敗（資料庫鎖定或內部錯誤）。 | |
 """
 )
-def delete_user(
+async def delete_user(
     user_id: int,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     # 確認權限
-    admin_viewer_required(current_user, db)
+    await admin_viewer_required(current_user, db)
 
     # 查找使用者
-    user = db.query(User).filter(User.id == user_id).first()
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -170,11 +164,11 @@ def delete_user(
 
     # 刪除使用者
     try:
-        db.delete(user)
-        db.commit()
+        await db.delete(user)
+        await db.commit()
         return {"status": True, "message": f"User {user_id} deleted successfully"}
-    except Exception as e:
-        db.rollback()
+    except Exception:
+        await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"status": False, "message": "Failed to delete user"}

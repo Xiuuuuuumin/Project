@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, SmallInteger, Numeric, TIMESTAMP, Float, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, SmallInteger, Numeric, TIMESTAMP, Float, Boolean, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from geoalchemy2 import Geometry
@@ -30,10 +30,9 @@ class Order(Base):
     __tablename__ = "orders"
 
     order_id = Column(String(32), primary_key=True)
-    #user_id = Column(Integer, nullable=False)
+    pending_history = relationship("PendingHistory", back_populates="order")
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     user = relationship("User", back_populates="orders")
-    #driver_id = Column(Integer, nullable=True)
     driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=True)
     driver = relationship("Driver", back_populates="orders")
 
@@ -98,3 +97,11 @@ class Route(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(),
                         onupdate=func.now(), nullable=False)
+    
+class PendingHistory(Base):
+    __tablename__ = "pending_history"
+
+    order = relationship("Order", back_populates="pending_history")
+    order_id = Column(String(32), ForeignKey("orders.order_id"), primary_key=True)
+    event_data = Column(JSON)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

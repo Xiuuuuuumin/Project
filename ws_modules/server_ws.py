@@ -1,5 +1,5 @@
 from fastapi import WebSocket, WebSocketDisconnect, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
 from services import get_current_user, admin_viewer_required
 import json
@@ -24,30 +24,53 @@ class WebSocketServer:
         self.active_connections.setdefault(client_type, []).append(websocket)
         print(f"new WebSocket connection: {client_type}")
 
-    def disconnect(self, websocket: WebSocket):
+    async def disconnect(self, websocket: WebSocket):
         for ctype, conns in self.active_connections.items():
             if websocket in conns:
                 conns.remove(websocket)
                 print(f"WebSocket disconnected: {ctype}")
+
+                # ✅ 如果是 ROS 斷線，就取消未完成訂單
+                if ctype == "ros":
+                    print("ROS 連線中斷，開始清理未完成訂單...")
+                    try:
+                        await self.manager._cancel_all_unfinished_orders()
+                        print("已將未完成訂單全部設為取消")
+                    except Exception as e:
+                        print("取消未完成訂單時發生錯誤：", e)
+
         # 移除 user_map 中綁定
         to_delete = [uid for uid, ws in self.user_map.items() if ws == websocket]
         for uid in to_delete:
             del self.user_map[str(uid)]
 
+
     # ----------------------
     # 驗證方法
     # ----------------------
     # Web
-    async def verify_web_user(self, websocket, db: Session, timeout: float = 5.0):
+    async def verify_web_user(self, websocket: WebSocket, db: AsyncSession, timeout: float = 5.0):
+        """
+        驗證 Web 使用者連線
+        """
         try:
             data = await asyncio.wait_for(websocket.receive_text(), timeout=timeout)
         except asyncio.TimeoutError:
             await websocket.close(code=4004, reason="Auth timeout(5 secs).")
             raise WebSocketDisconnect()
-        
+
         msg = self._parse_json_or_close(websocket, data, "Auth must be JSON.")
-        token = msg.get("token") or await self._close_missing_token(websocket)
-        user = await asyncio.to_thread(lambda: admin_viewer_required(current_user=get_current_user(token, db), db=db))
+        
+        token = msg.get("token")
+        if not token:
+            await self._close_missing_token(websocket)
+
+        # 使用 async 版本的 get_current_user
+        user = await get_current_user(token, db)
+
+        # 使用 async 版本的 admin_viewer_required 驗證
+        await admin_viewer_required(current_user=user, db=db)
+
         return user
 
     """ # Flutter
@@ -77,7 +100,10 @@ class WebSocketServer:
             raise WebSocketDisconnect()
         return user, user_id, vehicle """
     
-    async def verify_flutter_user(self, websocket, db: Session, timeout: float = 5.0):
+    async def verify_flutter_user(self, websocket: WebSocket, db: AsyncSession, timeout: float = 5.0):
+        """
+        驗證 Flutter 使用者連線
+        """
         try:
             print("[verify] 等待 Flutter 傳入驗證資料中...")
             data = await asyncio.wait_for(websocket.receive_text(), timeout=timeout)
@@ -86,11 +112,14 @@ class WebSocketServer:
             print("[verify] ❌ 驗證逾時（5 秒內未收到任何資料）")
             await websocket.close(code=4004, reason="Auth timeout(5 secs).")
             raise WebSocketDisconnect()
-        
+
         msg = self._parse_json_or_close(websocket, data, "Auth must be JSON.")
         print(f"[verify] 解析後資料: {msg}")
 
-        token = msg.get("token") or await self._close_missing_token(websocket)
+        token = msg.get("token")
+        if not token:
+            await self._close_missing_token(websocket)
+
         vehicle = msg.get("vehicle_name")
         user_id = msg.get("user_id")
 
@@ -98,15 +127,15 @@ class WebSocketServer:
             print("[verify] ❌ 缺少 vehicle_name")
             await websocket.close(code=4003, reason="Missing vehicle name.")
             raise WebSocketDisconnect()
-        
+
         if user_id is None:
             print("[verify] ❌ 缺少 user_id")
             await websocket.close(code=4003, reason="Missing user id.")
             raise WebSocketDisconnect()
-        
+
         try:
             print(f"[verify] 開始驗證 token 對應的 user（user_id={user_id}）")
-            user = await asyncio.to_thread(lambda: get_current_user(token, db))
+            user = await get_current_user(token, db)  # 使用 async 版本
             print(f"[verify] token 驗證成功，用戶 ID: {user.id}")
         except Exception as e:
             print(f"[verify] ❌ get_current_user 失敗: {e}")
@@ -126,33 +155,54 @@ class WebSocketServer:
     # ----------------------
     # 各 client endpoint
     # ----------------------
-    async def websocket_endpoint_web(self, websocket: WebSocket, db: Session = Depends(get_db)):
+    async def websocket_endpoint_web(self, websocket: WebSocket, db: AsyncSession):
+        """
+        WebSocket endpoint for web client
+        """
         await websocket.accept()
+
+        # 驗證 Web 使用者 (async 版本)
         user = await self.verify_web_user(websocket, db)
-        print(f"Manager {user.id} connection established.")
+        print(f"[websocket] Manager {user.id} connection established.")
+
+        # 加入 active connections
         await self.connect(websocket, "web")
-        
+
+        # 回傳驗證成功訊息
         await self.send_json(websocket, {
             "type": "auth",
             "status": "success",
             "message": f"Manager {user.id} connection established."
         })
 
+        await self.manager.send_pending_orders()
+        
+        # 開始接收訊息循環
         await self.handle_messages(websocket, "web")
 
-    async def websocket_endpoint_flutter(self, websocket: WebSocket, db: Session = Depends(get_db)):
+
+    async def websocket_endpoint_flutter(self, websocket: WebSocket, db: AsyncSession):
+        """
+        WebSocket endpoint for Flutter client
+        """
         await websocket.accept()
+
+        # 驗證 Flutter 使用者 (async 版本)
         user, user_id, vehicle = await self.verify_flutter_user(websocket, db)
-        print(f"User {user_id} connection established.")
+        print(f"[websocket] User {user_id} connection established.")
+
+        # 加入 active connections
         await self.connect(websocket, "flutter")
 
         # 綁定 user_id → websocket
         self.user_map[str(user_id)] = websocket
 
+        # 綁定 vehicle → user_id
         if vehicle not in self.manager.vehicle_user_map:
             self.manager.vehicle_user_map[vehicle] = set()
         self.manager.vehicle_user_map[vehicle].add(str(user_id))
-    
+
+        # 回傳驗證成功訊息
         await self.send_json(websocket, {
             "type": "auth",
             "status": "success",
@@ -160,6 +210,7 @@ class WebSocketServer:
         })
 
         try:
+            # 開始接收訊息循環
             await self.handle_messages(websocket, "flutter")
         finally:
             # 當 websocket 關閉時，自動移除該 user
@@ -168,7 +219,9 @@ class WebSocketServer:
                 if not self.manager.vehicle_user_map[vehicle]:
                     # 如果該車沒剩任何使用者，刪掉 key
                     del self.manager.vehicle_user_map[vehicle]
-            print(f"User {user_id} disconnected from vehicle {vehicle}")
+            self.user_map.pop(str(user_id), None)
+            print(f"[websocket] User {user_id} disconnected from vehicle {vehicle}")
+
 
     async def websocket_endpoint_ros(self, websocket: WebSocket):
         await websocket.accept()
@@ -238,7 +291,11 @@ class WebSocketServer:
         
         elif t == "ready_2_trip" and self.manager:
             try: await self.manager.handle_ros_ready_to_trip(message)
-            except Exception as e: print("handle_ros_odom error:", e)
+            except Exception as e: print("ready_2_trip error:", e)
+
+        elif t == "update_eta" and self.manager:
+            try: await self.manager.handle_ros_update_eta(message)
+            except Exception as e: print("update_eta error:", e)
             
     async def _handle_flutter_message(self, message: dict):
         t = message.get("type")
@@ -278,13 +335,16 @@ class WebSocketServer:
                     await self._handle_flutter_message(message)
                     pass
         finally:
-            self.disconnect(websocket)
+            await self.disconnect(websocket)
 
     # ----------------------
     # 送訊息
     # ----------------------
     async def send_json(self, websocket: WebSocket, message: dict):
-        await websocket.send_text(json.dumps(message))
+        try:
+            await websocket.send_text(json.dumps(message))
+        except (WebSocketDisconnect, RuntimeError):
+            pass
 
     async def broadcast(self, message: dict, client_type: str = None):
         if client_type:
@@ -295,16 +355,17 @@ class WebSocketServer:
         disconnected = []
         for ws in conns:
             try: await self.send_json(ws, message)
-            except WebSocketDisconnect: disconnected.append(ws)
+            except (WebSocketDisconnect, RuntimeError):
+                disconnected.append(ws)
 
         for ws in disconnected:
-            self.disconnect(ws)
+            await self.disconnect(ws)
 
     async def broadcast_to_user(self, user_id: str, message: dict):
         ws = self.user_map.get(str(user_id))
         if not ws:
             print(f"Failed to send, user {user_id} offline.")
-            self.disconnect(ws)
+            await self.disconnect(ws)
             return
 
         if ws.client_state.name != "CONNECTED":

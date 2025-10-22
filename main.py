@@ -1,34 +1,35 @@
 from fastapi import FastAPI, WebSocket, Depends
-from database import get_db
+from database import get_db, async_engine  # async version
 from routers.api_v1.routers import router
 from models import Base
-from database import engine
 from fastapi.middleware.cors import CORSMiddleware
 from ws_modules.global_ws import server_ws, manager
 from config.logging_config import setup_logging
-import uvicorn
-import logging
-import asyncio
 from contextlib import asynccontextmanager
-
-Base.metadata.create_all(bind=engine)
-setup_logging()
-
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # ----------------------
-# Lifespan
+# 建立 FastAPI app 並設定 lifespan
 # ----------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 1️⃣ 建表
+    async with async_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    # 2️⃣ 設定 logging
+    setup_logging()
+
+    # 3️⃣ 啟動背景任務
     await manager.start_background_tasks()
+
     try:
         yield
     finally:
         await manager.stop_background_tasks()
 
+
 app = FastAPI(lifespan=lifespan)
-
-
 
 # ----------------------
 # Middleware & Router
@@ -43,11 +44,12 @@ app.add_middleware(
 
 app.include_router(router, prefix="/api/v1")
 
+
 # ----------------------
 # WebSocket
 # ----------------------
 @app.websocket("/ws")
-async def ws_route(websocket: WebSocket, db=Depends(get_db)):
+async def ws_route(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
     client_type = websocket.query_params.get("client_type", "unknown").lower()
 
     if client_type == "web":

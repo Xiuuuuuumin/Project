@@ -1,17 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Body
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, Body
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from passlib.hash import bcrypt
-from datetime import datetime, timedelta
-from typing import Annotated
-from jose import JWTError, jwt
-from fastapi.security import OAuth2PasswordBearer
-import re
+from datetime import timedelta
+from typing import Optional
 from sqlalchemy.exc import IntegrityError
 from database import get_db
 from models import User
 from schemas import RegisterRq, RegisterRp, LoginRq, LoginRp, AdminCreateUserRq, AdminCreateUserRp
 from services import create_access_token, get_current_user, admin_viewer_required
-from sqlalchemy.exc import IntegrityError
 
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 1 week
 
@@ -57,16 +54,18 @@ router = APIRouter()
 """,
     tags=["User"]
 )
-def register(user: RegisterRq, db: Session = Depends(get_db)) -> RegisterRp:
-    # Phone format validation (Taiwan mobile: 09XXXXXXXX)
+async def register(user: RegisterRq, db: AsyncSession = Depends(get_db)) -> RegisterRp:
+    import re
     if not re.fullmatch(r"^09\d{8}$", user.phone):
         return RegisterRp(status=False, message="Invalid phone format")
-
-    # Check if phone already exists
-    existing_user = db.query(User).filter(User.phone == user.phone).first()
+    
+    result = await db.execute(
+        User.__table__.select().where(User.phone == user.phone)
+    )
+    existing_user = result.first()
     if existing_user:
         return RegisterRp(status=False, message="Phone number already exists")
-
+    
     try:
         hashed_password = bcrypt.hash(user.password)
         new_user = User(
@@ -75,14 +74,14 @@ def register(user: RegisterRq, db: Session = Depends(get_db)) -> RegisterRp:
             name=user.name
         )
         db.add(new_user)
-        db.commit()
-        db.refresh(new_user)
+        await db.commit()
+        await db.refresh(new_user)
         return RegisterRp(status=True, message="Registration successful")
     except IntegrityError:
-        db.rollback()
+        await db.rollback()
         return RegisterRp(status=False, message="Phone number already exists. (database error)")
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         return RegisterRp(status=False, message=f"Server error: {e}")
 
 # Login
@@ -123,19 +122,20 @@ def register(user: RegisterRq, db: Session = Depends(get_db)) -> RegisterRp:
 """,
     tags=["User","Admin"]
 )
-def login(request: LoginRq, db: Session = Depends(get_db)):
-    # Check if user exists
-    user = db.query(User).filter(User.phone == request.phone).first()
+async def login(request: LoginRq, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        User.__table__.select().where(User.phone == request.phone)
+    )
+    user = result.first()
     if not user or not bcrypt.verify(request.password, user.password_hash):
         return {"status": False, "message": "Invalid phone or password"}
-
-    # Generate token
+    
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
+    access_token = await create_access_token(
         data={"sub": user.phone, "role": user.role},
         expires_delta=access_token_expires
     )
-
+    
     return {
         "status": True,
         "message": "Login successful",
@@ -143,6 +143,7 @@ def login(request: LoginRq, db: Session = Depends(get_db)):
         "token_type": "bearer"
     }
 
+# Create admin/viewer
 @router.post(
     "/create",
     response_model=AdminCreateUserRp,
@@ -183,54 +184,47 @@ def login(request: LoginRq, db: Session = Depends(get_db)):
 """,
     tags=["Admin"]
 )
-def create_admin_viewer(
+async def create_admin_viewer(
     payload: AdminCreateUserRq = Body(...),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ) -> AdminCreateUserRp:
-    # 1. 確認 admin 身分 (此函式會在非 Admin 時拋出 403)
-    admin_viewer_required(current_user, db)
-
-    # 有效的角色清單
+    # 權限檢查
+    await admin_viewer_required(current_user, db)
+    
+    # 驗證 role
     valid_roles = {"admin", "viewer"}
-
-    # 3. 角色驗證
     if payload.role not in valid_roles:
         return AdminCreateUserRp(status=False, message="Invalid role specified. Must be one of: admin, viewer")
-
-    # 4. 檢查手機號碼是否已存在
-    existing_user = db.query(User).filter(User.phone == payload.phone).first()
+    
+    # 檢查是否已存在相同 phone
+    result = await db.execute(select(User).where(User.phone == payload.phone))
+    existing_user = result.scalars().first()
     if existing_user:
         return AdminCreateUserRp(status=False, message="Phone number already exists")
-
+    
+    # 建立新使用者
     try:
-        # 5. Hash 密碼
         hashed_password = bcrypt.hash(payload.password)
-        
-        # 建立新的 User 實例 (注意：您的 User 模型中需要有 name 欄位，已假設存在)
         new_user = User(
             phone=payload.phone,
             password_hash=hashed_password,
             name=payload.name,
-            role=payload.role,  # 設定指定的角色
+            role=payload.role
         )
-    
-        # 6. 儲存到資料庫
         db.add(new_user)
-        db.commit()
-        db.refresh(new_user)
+        await db.commit()
+        await db.refresh(new_user)
         
         return AdminCreateUserRp(
-            status=True, 
+            status=True,
             message="User created successfully",
             user_id=new_user.id
         )
-        
     except IntegrityError:
-        db.rollback()
-        # 即使前面檢查過，仍處理潛在的資料庫唯一性錯誤
+        await db.rollback()
         return AdminCreateUserRp(status=False, message="Phone number already exists (database integrity error)")
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         return AdminCreateUserRp(status=False, message=f"Server error: {e}")
 

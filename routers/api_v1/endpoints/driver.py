@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Body
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
 from models import Driver
 from services import get_current_user, admin_viewer_required
@@ -9,13 +9,13 @@ from schemas import DriverRp, DriverCreateRq
 router = APIRouter()
 
 @router.post("/create", response_model=DriverRp, tags=["Driver"])
-def create_driver(
+async def create_driver(
     payload: DriverCreateRq = Body(...),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user)
 ):
     # 確認 admin 身分
-    admin_viewer_required(current_user, db)
+    await admin_viewer_required(current_user, db)
 
     new_driver = Driver(
         name=payload.name,
@@ -28,8 +28,8 @@ def create_driver(
     )
 
     db.add(new_driver)
-    db.commit()
-    db.refresh(new_driver)
+    await db.commit()
+    await db.refresh(new_driver)
 
     return DriverRp(
         id=new_driver.id,

@@ -3,7 +3,7 @@ import websockets
 import json
 
 async def websocket_client():
-    uri = "wss://4f02b8beafae.ngrok-free.app/ws?client_type=flutter"  # 改成你的 server URL
+    uri = "wss://b1b9b48f07b2.ngrok-free.app/ws?client_type=flutter"  # 改成你的 server URL
     try:
         async with websockets.connect(uri) as ws:
             print("WebSocket 已連線")

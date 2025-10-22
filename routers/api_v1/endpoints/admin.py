@@ -1,46 +1,14 @@
 from fastapi import APIRouter, Depends, Body
-from sqlalchemy.orm import Session
-from typing import List
-from typing import Optional, Dict
+from sqlalchemy.ext.asyncio import AsyncSession
+from typing import List, Optional, Dict
+from sqlalchemy import select, and_, func
 
 from database import get_db 
 from models import Order, User, Driver
 from services import get_current_user, admin_viewer_required
 from schemas import OrderListRq, OrderRp, PaginatedOrdersRp, OrderHistoryRp, TestRq, PaginatedUsersRp, UserListRq, UserRp, DriverRp
 
-
 router = APIRouter()
-
-@router.post("/order", response_model=List[OrderHistoryRp], tags=["Admin"])
-def get_order_admin(
-    payload: TestRq = Body(...),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    # 確認 admin 身分
-    admin_viewer_required(current_user, db)
-
-    orders = (
-        db.query(Order)
-        .order_by(Order.order_id.asc())
-        .limit(10)
-        .all()
-    )
-
-    result = [
-        OrderHistoryRp(
-            pickup_lat=o.pickup_lat,
-            pickup_lng=o.pickup_lng,
-            dropoff_lat=o.dropoff_lat,
-            dropoff_lng=o.dropoff_lng,
-            pickup_name=o.pickup_name,
-            dropoff_name=o.dropoff_name,
-            date=o.created_at  # 直接用 UTC
-        )
-        for o in orders
-    ]
-
-    return result
 
 #get order table
 @router.post(
@@ -93,49 +61,49 @@ def get_order_admin(
 - **422 Unprocessable Entity**: 請求參數格式錯誤 (例如：日期格式不正確)。
 """
 )
-def list_orders(
+async def list_orders(
     payload: OrderListRq = Body(...),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # 確認 admin 身分
-    admin_viewer_required(current_user, db)
+    # 權限檢查
+    await admin_viewer_required(current_user, db)
 
     filters = []
 
-    # 篩選條件
     if payload.status:
         filters.append(Order.status.in_(payload.status))
     if payload.user_id is not None:
         filters.append(Order.user_id == payload.user_id)
     if payload.driver_id is not None:
         filters.append(Order.driver_id == payload.driver_id)
-
-    # 日期篩選，直接用 UTC
     if payload.start_date:
         filters.append(Order.created_at >= payload.start_date)
     if payload.end_date:
         filters.append(Order.created_at <= payload.end_date)
-
     if payload.pickup_name:
         filters.append(Order.pickup_name.contains(payload.pickup_name))
     if payload.dropoff_name:
         filters.append(Order.dropoff_name.contains(payload.dropoff_name))
 
-    # 分頁
     skip = (payload.page - 1) * payload.size
-    total = db.query(Order).filter(*filters).count()
 
-    orders = (
-        db.query(Order)
-        .filter(*filters)
-        .order_by(Order.order_id.asc())
-        .offset(skip)
-        .limit(payload.size)
-        .all()
-    )
+    # 計算總數
+    total_query = select(func.count()).select_from(Order)
+    if filters:
+        total_query = total_query.where(and_(*filters))
+    total_result = await db.execute(total_query)
+    total = total_result.scalar()
 
-    # 組成 Response
+    # 取分頁資料
+    order_query = select(Order)
+    if filters:
+        order_query = order_query.where(and_(*filters))
+    order_query = order_query.order_by(Order.order_id.asc()).offset(skip).limit(payload.size)
+
+    result = await db.execute(order_query)
+    orders = result.scalars().all()  # 拿到 ORM 物件
+
     return PaginatedOrdersRp(
         total=total,
         page=payload.page,
@@ -154,7 +122,7 @@ def list_orders(
                 passengers=o.passengers,
                 accept_pooling=o.accept_pooling,
                 status=o.status,
-                created_at=o.created_at,  # 直接回傳 UTC
+                created_at=o.created_at,
                 updated_at=o.updated_at,
             )
             for o in orders
@@ -210,13 +178,13 @@ def list_orders(
 - **403 Forbidden**: 用戶身份**非管理員**。
 """
 )
-def list_users(
+async def list_users(
     payload: UserListRq = Body(...),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # 只有 admin 可以查詢
-    admin_viewer_required(current_user, db)
+    # 權限檢查
+    await admin_viewer_required(current_user, db)
 
     filters = []
 
@@ -234,16 +202,22 @@ def list_users(
         filters.append(User.created_at <= payload.end_date)
 
     skip = (payload.page - 1) * payload.size
-    total = db.query(User).filter(*filters).count()
 
-    users = (
-        db.query(User)
-        .filter(*filters)
-        .order_by(User.id.asc())
-        .offset(skip)
-        .limit(payload.size)
-        .all()
-    )
+    # 計算總數
+    total_query = select(func.count()).select_from(User)
+    if filters:
+        total_query = total_query.where(and_(*filters))
+    total_result = await db.execute(total_query)
+    total = total_result.scalar()
+
+    # 取分頁資料
+    user_query = select(User)
+    if filters:
+        user_query = user_query.where(and_(*filters))
+    user_query = user_query.order_by(User.id.asc()).offset(skip).limit(payload.size)
+
+    result = await db.execute(user_query)
+    users = result.scalars().all()  # 拿到 ORM 物件
 
     return PaginatedUsersRp(
         total=total,
@@ -262,6 +236,7 @@ def list_users(
             for u in users
         ]
     )
+
 
 #get driver table
 @router.post(
@@ -295,24 +270,18 @@ def list_users(
 - **403 Forbidden**: 用戶身份**非管理員**。
 """
 )
-def list_drivers_post(
-    # 使用 Body(None) 或 Body(default=None) 讓請求 Body 可以為空
-    # 這裡使用 Optional[Dict] 確保即使不傳 Body 也能正常工作
+async def list_drivers_post(
     payload: Optional[Dict] = Body(default=None), 
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """
-    回傳所有 Driver 資料（小型資料集，不需要分頁或篩選）
-    只有 admin 可以查詢
-    """
-    # 驗證 admin 權限 (與 GET 版本完全相同)
-    admin_viewer_required(current_user, db)
+    # 權限檢查
+    await admin_viewer_required(current_user, db)
 
-    # 取得所有司機，依照 id 升序 (與 GET 版本完全相同)
-    drivers = db.query(Driver).order_by(Driver.id.asc()).all()
+    # ORM 查詢
+    result = await db.execute(select(Driver).order_by(Driver.id.asc()))
+    drivers = result.scalars().all()  # 拿到 ORM 物件
 
-    # 回傳 Pydantic model 列表 (與 GET 版本完全相同)
     return [
         DriverRp(
             id=d.id,

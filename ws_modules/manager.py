@@ -1,9 +1,14 @@
-from sqlalchemy.orm import Session
-from models import Driver, Order, Route
+from fastapi import Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from models import Driver, Order, Route, PendingHistory
 from enums import OrderStatus
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from geoalchemy2 import WKTElement
-from database import get_db
+from database import get_db, AsyncSessionLocal
 import asyncio
+from geoalchemy2.shape import from_shape
+from shapely.geometry import LineString
 
 class WebSocketManager:
     def __init__(self, server_ws):
@@ -16,20 +21,17 @@ class WebSocketManager:
     async def start_background_tasks(self):
         task = asyncio.create_task(self.periodic_broadcast())
         self._tasks.add(task)
-
-        # 自動移除完成的 task
         task.add_done_callback(lambda t: self._tasks.discard(t))
 
     async def stop_background_tasks(self):
         for task in list(self._tasks):
             task.cancel()
-        # 等待所有 task 完全取消
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
 
     async def periodic_broadcast(self):
         while True:
-            await asyncio.sleep(10)  # 每 10 秒推播
+            await asyncio.sleep(10)
             await self.server_ws.broadcast({"client_type": "server", "msg": "ping"})
 
     async def broadcast_to_ros(self, ros_message: dict):
@@ -40,23 +42,42 @@ class WebSocketManager:
         await self.server_ws.broadcast(ros_message, client_type="ros")
         print("已推送給 ROS:", ros_message)
 
-    """ async def broadcast_to_user(self, user_id: str, message: dict):
-        websocket = self.server_ws.user_map.get(str(user_id))
-        if websocket:
-            # 檢查連線狀態
-            if websocket.client_state.name != "CONNECTED":
-                print(f"user {user_id} offline, remove from map")
-                self.server_ws.user_map.pop(str(user_id), None)
-                return
+    async def broadcast_to_web(self, message: dict):
+        await self.server_ws.broadcast(message, client_type="web")
+        print("已推送給 Web:", message)
 
+    async def _cancel_all_unfinished_orders(self):
+        """
+        當 ROS 斷線時，將所有未完成訂單 (status = 0,1,2...) 更新為已取消
+        """
+        async with AsyncSessionLocal() as db:  # 自己開 session
             try:
-                await self.server_ws.send_json(websocket, message)
-                print(f"Msg send to {user_id}: {message}")
+                async with db.begin():  # 開啟交易
+                    # 查出未完成訂單 (例如 status=0:待派車, 1:進行中)
+                    result = await db.execute(
+                        select(Order).where(Order.status.in_([
+                            OrderStatus.PENDING.value,    # 0
+                            OrderStatus.ASSIGNED.value,   # 1
+                            OrderStatus.ACCEPTED.value,   # 2
+                            OrderStatus.IN_PROGRESS.value,# 3
+                        ]))
+                    )
+                    orders = result.scalars().all()
+
+                    if not orders:
+                        print("目前沒有未完成訂單，無需取消")
+                        return
+                    
+                    # 批次更新狀態
+                    for order in orders:
+                        order.status = OrderStatus.CANCELLED.value  # 例如 5
+                        print(f"🚫 訂單 {order.order_id} 已設為取消")
+
+                # commit 在 async with db.begin() 結束時自動執行
+                print("✅ 所有未完成訂單已設為取消")
+
             except Exception as e:
-                print(f"handle_ros_odom error: {e}, remove user {user_id} connection")
-                self.server_ws.user_map.pop(str(user_id), None)
-        else:
-            print(f"Failed to send, user {user_id} offline.") """
+                print("❌ 取消未完成訂單時發生錯誤：", e)
 
     async def wait_for_ros_response(self, message_id: str, timeout: int = 10):
         """
@@ -87,38 +108,45 @@ class WebSocketManager:
         position = pose.get("position", {})
         yaw = pose.get("yaw")
 
+        # 廣播給 Web
         await self.server_ws.broadcast(message, client_type="web")
 
         if position.get("lat") is not None and position.get("lng") is not None:
             try:
-                # 即時取得 session
-                db_session = next(get_db())
-                driver = db_session.query(Driver).filter(Driver.name == name).first()
-                if driver:
-                    driver.current_lat = position["lat"]
-                    driver.current_lng = position["lng"]
-                    driver.yaw = yaw
-                    db_session.commit()
+                async with AsyncSessionLocal() as db:      # 自己開 session
+                    async with db.begin():                  # 事務開始
+                        result = await db.execute(
+                            select(Driver).where(Driver.name == name)
+                        )
+                        driver = result.scalars().first()
+                        if driver:
+                            driver.current_lat = position["lat"]
+                            driver.current_lng = position["lng"]
+                            driver.yaw = yaw
+                    # commit 由 db.begin() 自動完成
+            except SQLAlchemyError as e:
+                print("更新 driver 位置時發生資料庫錯誤:", e)
             except Exception as e:
                 print("更新 driver 位置時發生錯誤:", e)
 
-        # 發送
+        # 廣播給使用者
         for user_id in self.vehicle_user_map.get(name, set()):
             await self.server_ws.broadcast_to_user(user_id, message)
 
     # -------------------
-    # Dispatch 訊息處理
+    # Dispatched/Queued 訊息處理
     # -------------------
     async def handle_ros_dispatched_queued(self, message: dict):
         """
         處理 ROS dispatched/queued 訊息：
         1. 推送給 Web
         2. 更新訂單狀態
-        3. 存 routes table（path1 / path2 都存，存在則更新）
+        3. 指派 driver
+        4. 儲存路線資料
         """
         user_id = message.get("user_id")
         order_id = message.get("order_id")
-        assigned_vehicle = message.get("assigned_vehicle")
+        assigned_vehicle = message.get("vehicle")
         t = message.get("type")
 
         if not user_id:
@@ -128,78 +156,62 @@ class WebSocketManager:
         # --- 1. 推送給 Web ---
         await self.server_ws.broadcast(message, client_type="web")
 
-        db_session = next(get_db())
-        """ try:
-            # --- 2. 更新訂單狀態 ---
-            order = db_session.query(Order).filter(Order.order_id == order_id).first()
-            if order:
-                if t == "dispatched":
-                    order.status = OrderStatus.ASSIGNED.value
-                elif t == "queued":
-                    order.status = OrderStatus.ACCEPTED.value
+        # --- 2. 更新訂單狀態 & 指派 driver & 儲存路線 ---
+        async with AsyncSessionLocal() as db:  # 自己開 session
+            try:
+                async with db.begin():  # 事務開始
+                    # 取得訂單
+                    result = await db.execute(select(Order).where(Order.order_id == order_id))
+                    order = result.scalars().first()
 
-                if assigned_vehicle:
-                    driver = db_session.query(Driver).filter(Driver.name == assigned_vehicle).first()
-                    if driver:
-                        order.driver_id = driver.id
-                        print(f"指派 driver {driver.id} 給訂單 {order.order_id}")
+                    if not order:
+                        print(f"找不到 order_id={order_id} 的訂單")
+                        return
+
+                    # 更新 status
+                    if t == "dispatched":
+                        order.status = OrderStatus.ASSIGNED.value
+                        route_type = OrderStatus.ASSIGNED.value
+                    elif t == "queued":
+                        order.status = OrderStatus.ACCEPTED.value
+                        route_type = OrderStatus.ACCEPTED.value
                     else:
-                        print(f"找不到 driver 對應 {assigned_vehicle}")
-                else:
-                    print("沒有 assigned_vehicle，跳過指派 driver")
-            else:
-                print(f"找不到 order_id={order_id} 的訂單")
+                        print(f"未知的 route type: {t}")
+                        return
 
-            # --- 3. 處理 routes ---
-            route_data = {}
-            for path_key in ["path1", "path2"]:
-                path_list = message.get(path_key, [])
-                if path_list:
-                    points_str = ", ".join(f"{pt['lng']} {pt['lat']}" for pt in path_list)
-                    linestring = f"SRID=4326;LINESTRING({points_str})"
-                    route_data[path_key] = linestring
-                else:
-                    route_data[path_key] = None
+                    # 指派 driver
+                    if assigned_vehicle:
+                        driver_result = await db.execute(select(Driver).where(Driver.name == assigned_vehicle))
+                        driver = driver_result.scalars().first()
+                        if driver:
+                            order.driver_id = driver.id
+                            print(f"指派 driver {driver.id} 給訂單 {order.order_id}")
+                        else:
+                            print(f"找不到 driver 對應 {assigned_vehicle}")
+                    else:
+                        print("沒有 assigned_vehicle，跳過指派 driver")
 
-            # 使用原生 SQL：若 order_id 已存在則更新
-            sql = 
-            INSERT INTO routes (order_id, user_id, vehicle_name, type, eta_to_pick, eta_trip, total_distance_m, path1, path2)
-            VALUES (:order_id, :user_id, :vehicle_name, :type, :eta_to_pick, :eta_trip, :total_distance_m, 
-                    ST_GeomFromEWKT(:path1), ST_GeomFromEWKT(:path2))
-            ON CONFLICT (order_id) DO UPDATE SET
-                user_id = EXCLUDED.user_id,
-                vehicle_name = EXCLUDED.vehicle_name,
-                type = EXCLUDED.type,
-                eta_to_pick = EXCLUDED.eta_to_pick,
-                eta_trip = EXCLUDED.eta_trip,
-                total_distance_m = EXCLUDED.total_distance_m,
-                path1 = EXCLUDED.path1,
-                path2 = EXCLUDED.path2;
-            
+                    # --- 3. 儲存 route ---
+                    # 檢查是否已有該 order 的 route（有的話更新，沒有就新增）
+                    existing_route = await db.get(PendingHistory, order_id)
+                    if existing_route:
+                        existing_route.event_data = message
+                        print(f"更新 Pending History: order_id={order_id}")
+                    else:
+                        new_route = PendingHistory(
+                            order_id=order_id,
+                            event_data = message
+                        )
+                        db.add(new_route)
+                        print(f"新增 Pending History: order_id={order_id}")
 
-            db_session.execute(sql, {
-                "order_id": order_id,
-                "user_id": user_id,
-                "vehicle_name": assigned_vehicle,
-                "type": OrderStatus.ASSIGNED.value if t == "dispatched" else OrderStatus.ACCEPTED.value,
-                "eta_to_pick": message.get("eta_to_pick"),
-                "eta_trip": message.get("eta_trip"),
-                "total_distance_m": message.get("total_distance_m"),
-                "path1": route_data["path1"],
-                "path2": route_data["path2"],
-            })
+                print(f"訂單已更新 {t} 資料，order_id={order_id}")
 
-            db_session.commit()
-            print(f"訂單更新 & route table 已新增/更新 {t} 資料，order_id={order_id}")
-
-        except Exception as e:
-            db_session.rollback()
-            print("處理 dispatched/queued 時發生錯誤:", e) """
-
-
+            except SQLAlchemyError as e:
+                print("處理 dispatched/queued 時發生資料庫錯誤:", e)
 
     # -------------------
-    # Ready to trip 訊息處理
+    # Ready 2 trip 訊息處理
     # -------------------
     async def handle_ros_ready_to_trip(self, message: dict):
         user_id = message.get("user_id")
@@ -207,4 +219,36 @@ class WebSocketManager:
         except Exception as e:
                 print("broadcast_to_user(ready2trip) error:", e)
 
+    # -------------------
+    # Update eta 訊息處理
+    # -------------------
+    async def handle_ros_update_eta(self, message: dict):
+        await self.server_ws.broadcast(message, client_type="web")
+        name=message.get("vehicle_name")
+        for user_id in self.vehicle_user_map.get(name, set()):
+            await self.server_ws.broadcast_to_user(user_id, message)
 
+    # -------------------
+    # web刷新資料傳送
+    # -------------------
+    async def send_pending_orders(self):
+        """
+        將 status = 1/2/3 的 pending history 傳給所有 web 客戶端
+        """
+        try:
+            async with AsyncSessionLocal() as db:
+                # 用 relationship join
+                result = await db.execute(
+                    select(PendingHistory)
+                    .join(PendingHistory.order)
+                    .where(Order.status.in_([1, 2, 3]))
+                )
+                records = result.scalars().all()
+
+                for record in records:
+                    await self.server_ws.broadcast(record.event_data, client_type="web")
+                
+                print(f"已推送 {len(records)} 筆 pending history 給 web")
+        
+        except Exception as e:
+            print("推送 pending history 發生錯誤:", e)
