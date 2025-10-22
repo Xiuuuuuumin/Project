@@ -138,8 +138,8 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
 	"user_id": user_id,
 	"message_id": message_id,
 	"best_vehicle": best_role,
-	"etamin": round(min(e for e, , _ in eta_list) / 60.0),
- 	"etamax": round(max(e for e, , _ in eta_list) / 60.0),
+	"eta_min": round(min(e for e, , _ in eta_list) / 60.0),
+ 	"eta_max": round(max(e for e, , _ in eta_list) / 60.0),
 	 "path": route_best,
 }
 
@@ -167,7 +167,7 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
     "type": "dispatched",
     "user_id":user_id,
 	"order_id": order_id,
-    "assigned_vehicle": best_role,
+    "vehicle": best_role,
     "eta_to_pick": round(eta_to_pick),
     "eta_trip": round(eta_trip),
 	"total_distance_m": ,
@@ -178,15 +178,22 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
 // queued (等車)
 // ros -> server -> flutter
 {
-    "type": "queued",
-    "user_id":user_id,
-	"order_id": order_id,
-    "assigned_vehicle": best_role,
-    "eta_to_pick": round(eta_to_pick),
-    "eta_trip": round(eta_trip),
-	"total_distance_m": ,
-    "path1": [],
-    "path2": [],
+     "type": "queued",
+     "order_id": order_id,
+     "eta_wait_sec": round(eta_wait_to_pick, 1),
+     "path2": route_trip,
+     "message": f"目前車輛忙碌，預計約 {eta_wait_to_pick:.1f} 秒後可上車"
+}
+
+// update_eta (接乘客的過程)
+// ros -> server -> flutter
+{
+	"type": "update_eta",
+	"vehicle_name":role,
+	"user_id":user_id,
+	"order_id":order_id,
+	"eta_remaining":eta_remaining,
+	"phase": "pickup"
 }
 
 // ready_2_trip (請上車)
@@ -201,6 +208,49 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
 // flutter -> server -> ros
 {
 	"type": "geton",
+	"vehicle_name": vehicle_name,
+	"order_id": order_id
+}
+
+// trip (出發)
+// ros -> server -> flutter
+{
+	"type": "trip",
+	"vehicle_name": vehicle_name,
+	"order_id": order_id
+}
+
+// update_eta (載客的過程)
+// ros -> server -> flutter
+{
+	"type": "update_eta",
+	"vehicle_name":role,
+	"user_id":user_id,
+	"order_id":order_id,
+	"eta_remaining":eta_remaining,
+	"phase": "trip"
+}
+
+// arrive (抵達目的地)
+// ros -> server -> flutter
+{
+	"type": "arrive",
+	"vehicle_name": vehicle_name,
+	"order_id": order_id
+}
+
+// getoff (下車)
+// flutter -> server -> ros
+{
+	"type": "getoff",
+	"vehicle_name": vehicle_name,
+	"order_id": order_id
+}
+
+// finish (結單)
+// ros -> server -> flutter
+{
+	"type": "finish",
 	"vehicle_name": vehicle_name,
 	"order_id": order_id
 }
