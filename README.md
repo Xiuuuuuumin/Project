@@ -247,12 +247,12 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
 	"order_id": order_id
 }
 
-// finish (結單)
-// ros -> server -> flutter
+// cancle (取消訂單)
+// flutter -> server -> ros
 {
-	"type": "finish",
-	"vehicle_name": vehicle_name,
-	"order_id": order_id
+	"type": "cancel",
+	"order_id": order_id,
+	"vehicle_name": vehicle_name
 }
 
 ```
