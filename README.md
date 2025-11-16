@@ -394,3 +394,151 @@ sendMessage("Hello from Flutter!");
 	- 避免在 Web 上使用 Go Live 或自動刷新功能，否則 WebSocket 會一直重連
 5. 廣播
 	- Server 會將訊息廣播給同一 order_id 房間內的所有 WebSocket
+
+
+### 🧊 1. **進入聊天室：join**
+
+### 用戶加入特定 order 的聊天房間
+
+（Web 可反覆加入不同房間）
+
+### Client → Server
+
+```json
+{
+  "type": "chat",
+  "action": "join",
+  "payload": ""            // flutter: 空字串
+}
+
+```
+
+```json
+{
+  "type": "chat",
+  "action": "join",
+  "payload": "order_id"    // web: 指定 order_id
+}
+
+```
+
+### Server → Client（請求歷史訊息）
+
+```json
+{
+  "type": "chat",
+  "action": "history",
+  "payload": null}
+
+```
+
+### Server → Client（回傳歷史訊息）
+
+```json
+{
+  "type": "chat",
+  "action": "history",
+  "payload": {
+    "order_id": "146f35ebdf7f...",
+    "messages": [
+      {
+        "sender_id": 19,
+        "sender_type": "user",
+        "content": "hello",
+        "timestamp": "2025-11-15T12:00:00Z"
+      }
+    ]
+  }
+}
+
+```
+
+---
+
+### 📝 2. **發送訊息：send**
+
+### Client → Server
+
+```json
+{
+  "type": "chat",
+  "action": "send",
+  "payload": "請問車在哪？"
+}
+
+```
+
+### Server → 所有在房內的 Client（推播）
+
+```json
+{
+  "type": "chat",
+  "action": "message",
+  "payload": {
+    "order_id": "146f35ebdf7f...",
+    "sender_id": 19,
+    "sender_type": "user",
+    "content": "請問車在哪？",
+    "timestamp": "2025-11-15T20:30:12Z"
+  }
+}
+
+```
+
+---
+
+### 📨 3. **推播新訊息：message**
+
+（Server 主動推播到房內成員）
+
+```json
+{
+  "type": "chat",
+  "action": "message",
+  "payload": {
+    "order_id": "146f35ebdf7f...",
+    "sender_id": 9,
+    "sender_type": "driver",
+    "content": "我在門口囉。",
+    "timestamp": "2025-11-15T20:31:00Z"
+  }
+}
+
+```
+
+---
+
+### 🚪 4. **離開聊天室：leave**
+
+（Web 切換 order 時也會呼叫）
+
+### Client → Server
+
+```json
+{
+  "type": "chat",
+  "action": "leave"
+}
+
+```
+
+### Server → 房內其他 Client
+
+```json
+{
+  "type": "chat",
+  "action": "member_left",
+  "payload": "user#19 left the room"
+}
+
+```
+
+### Server → 離開者本人
+
+```json
+{
+  "type": "chat",
+  "action": "left"
+}
+
+```
