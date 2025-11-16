@@ -268,6 +268,27 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
 
 ## WebSocket 聊天室
 
+### 🧊 0**. Web取得所有active聊天室**
+
+### Client → Server:
+
+```json
+{
+  "type": "chat",
+  "action": "get_active_room"
+}
+```
+
+### Server → Client
+
+```json
+{
+  "type": "chat",
+  "action": "get_active_room"
+  "payload":["2a741c0f67f74757ba3b330cfa30f4fa","146f35ebdf7f47878f38351e40b1be0e","8b475e65634042a69d8a7d5dd6b117c7"]
+}
+```
+
 ### 🧊 1. **進入聊天室：join**
 
 ### 用戶加入特定 order 的聊天房間
