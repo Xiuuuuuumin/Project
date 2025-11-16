@@ -321,7 +321,7 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
 {
   "type": "chat",
   "action": "history",
-  "payload": null}
+}
 
 ```
 
