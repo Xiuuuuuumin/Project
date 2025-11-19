@@ -240,6 +240,7 @@ await ws.send(json.dumps({"type": "odom", "data": {...}}))
 	"type": "arrive",
 	"vehicle_name": vehicle_name,
 	"order_id": order_id
+	"user_id": user_id
 }
 
 // getoff (下車)
